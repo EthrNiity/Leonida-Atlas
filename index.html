@@ -927,7 +927,7 @@ select.sel{width:100%;background:var(--panel2);border:1px solid var(--line);bord
   <div class="modal">
     <div class="mh"><h2>Options</h2><button class="hbtn" data-close>✕</button></div>
     <div class="mb menu">
-      <p><b style="color:var(--txt)">Fond de carte.</b> Importe le poster officiel <i>The Great State of Leonida</i> (1882×2576) : il est reconnu automatiquement et les points du pack se placent aux bons endroits. Tu peux aussi importer n’importe quelle autre capture.</p>
+      <p><b style="color:var(--txt)">Fond de carte.</b> Importe le poster officiel <i>The Great State of Leonida</i> (téléchargeable gratuitement sur le site de GTA 6) : il est reconnu automatiquement, les points du pack se placent aux bons endroits, et s’il est connecté à ton compte il te suit sur tous tes appareils. Tu peux aussi importer n’importe quelle autre capture.</p>
       <button class="hbtn" id="mImportMap">🗺️ Importer une carte (poster Leonida, PNG / JPG)</button>
       <button class="hbtn" id="mResetMap">↺ Revenir à la carte stylisée (Floride)</button>
       <p style="margin-top:8px"><b style="color:var(--txt)">Sauvegarde.</b> Tes points sont enregistrés dans ce navigateur. Exporte-les pour les garder ou les passer sur un autre appareil.</p>
@@ -1442,13 +1442,14 @@ $('#fileMap').addEventListener('change',e=>{
       const ok = await idb.set('mapImage',{url:rd.result, ratio});
       const poster = Math.abs(ratio-POSTER_RATIO)<.01;
       setBackground(rd.result, ratio, true, poster); closeModals();
+      if(window.cloudSaveMap) cloudSaveMap(f, ratio);
       toast(poster ? 'Poster Leonida reconnu : points recalés' : (ok?'Carte importée':'Carte affichée (non sauvegardée)'));
     };
     img.src = rd.result;
   };
   rd.readAsDataURL(f); e.target.value='';
 });
-$('#mResetMap').addEventListener('click',async ()=>{ await idb.del('mapImage'); setBackground(DEFAULT_MAP,1,false,false); closeModals(); toast('Carte stylisée restaurée') });
+$('#mResetMap').addEventListener('click',async ()=>{ await idb.del('mapImage'); if(window.cloudDeleteMap) cloudDeleteMap(); setBackground(DEFAULT_MAP,1,false,false); closeModals(); toast('Carte stylisée restaurée') });
 $('#mExport').addEventListener('click',()=>{
   const blob = new Blob([JSON.stringify({app:'leonida-atlas',version:1,exported:new Date().toISOString(),points:state.points},null,2)],{type:'application/json'});
   const a = document.createElement('a'); a.href=URL.createObjectURL(blob);
@@ -1880,6 +1881,27 @@ async function cloudPull(){
   else if((data.data?.modifiedAt||0) < localMod) window.cloudPush();
   setCloudBadge('ok');
 }
+// Fond de carte privé : stocké dans l'espace du compte (bucket privé « leonida », dossier = id du compte)
+const mapPath = () => `${sbUser.id}/map`;
+window.cloudSaveMap = async function(file, ratio){
+  if(!sb || !sbUser) return;
+  const body = file.arrayBuffer ? await file.arrayBuffer() : file;
+  const { error } = await sb.storage.from('leonida').upload(mapPath(), body, { upsert:true, contentType:file.type||'image/jpeg' });
+  if(!error){ try{ localStorage.setItem('leonida-atlas-mapratio', String(ratio)) }catch(e){} await sb.from('leonida_state').upsert({ user_id:sbUser.id, data:{...localSnapshot(), mapRatio:ratio}, updated_at:new Date().toISOString() }); toast('☁️ Carte enregistrée sur ton compte') }
+  else toast('Carte non envoyée en ligne : ' + error.message);
+};
+window.cloudDeleteMap = async function(){ if(sb && sbUser) await sb.storage.from('leonida').remove([mapPath()]) };
+async function cloudLoadMap(){
+  if(!sb || !sbUser) return;
+  const local = await idb.get('mapImage'); if(local && local.url) return;
+  const { data, error } = await sb.storage.from('leonida').download(mapPath());
+  if(error || !data) return;
+  const url = await new Promise(r=>{ const fr=new FileReader(); fr.onload=()=>r(fr.result); fr.readAsDataURL(data) });
+  const ratio = await new Promise(r=>{ const im=new Image(); im.onload=()=>r(im.naturalHeight/im.naturalWidth); im.onerror=()=>r(1); im.src=url });
+  await idb.set('mapImage',{url, ratio});
+  setBackground(url, ratio, true, Math.abs(ratio-POSTER_RATIO)<.01);
+  toast('☁️ Ta carte a été récupérée depuis ton compte');
+}
 function setCloudBadge(st){
   const b = $('#btnCloud');
   if(!sbUser){ b.textContent='☁️ Connexion'; b.style.borderColor=''; return }
@@ -1890,7 +1912,7 @@ function renderCloud(){
   const el = $('#cloudBody');
   if(sbUser){
     el.innerHTML = `<p class="small" style="font-size:13px">Connecté : <b style="color:var(--txt)">${esc(sbUser.email||'')}</b><br>Tes points, statuts, véhicules et ventes sont sauvegardés en ligne et suivent sur tous tes appareils.</p>
-      <p class="small">La carte importée (poster) reste propre à chaque appareil : importe-la une fois sur chacun.</p>
+      <p class="small">Ta carte importée (poster) est aussi gardée dans ton espace privé : elle se charge toute seule sur tes autres appareils. Personne d’autre n’y a accès.</p>
       <button class="hbtn" id="cSync">🔄 Synchroniser maintenant</button>
       <button class="hbtn" id="cOut" style="color:#ff7b9c">Se déconnecter</button>`;
     $('#cSync').onclick = async ()=>{ await cloudPull(); toast('Synchronisé') };
@@ -1907,6 +1929,9 @@ function renderCloud(){
       const { data, error } = await sb.auth.signInWithPassword({ email:$('#cEmail').value.trim(), password:$('#cPass').value });
       if(error){ $('#cMsg').textContent = 'Échec : ' + (error.message==='Invalid login credentials' ? 'e-mail ou mot de passe incorrect' : error.message); return }
       sbUser = data.user; await cloudPull(); setCloudBadge('ok'); closeModals(); toast('Connecté');
+      const loc = await idb.get('mapImage');
+      if(loc && loc.url){ const { data:list } = await sb.storage.from('leonida').list(sbUser.id); if(!list || !list.some(o=>o.name==='map')){ const blob = await (await fetch(loc.url)).blob(); cloudSaveMap(blob, loc.ratio) } }
+      else cloudLoadMap();
     };
   }
 }
@@ -1931,7 +1956,7 @@ async function fetchCloudPack(manual){
   const { data } = await sb.auth.getSession();
   sbUser = data.session?.user || null; setCloudBadge(sbUser?'ok':undefined);
   await fetchCloudPack(false);
-  if(sbUser) await cloudPull();
+  if(sbUser){ await cloudPull(); cloudLoadMap() }
   document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible'){ fetchCloudPack(false); if(sbUser) cloudPull() } });
 })();
 
