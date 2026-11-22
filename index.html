@@ -927,7 +927,7 @@ select.sel{width:100%;background:var(--panel2);border:1px solid var(--line);bord
   <div class="modal">
     <div class="mh"><h2>Options</h2><button class="hbtn" data-close>✕</button></div>
     <div class="mb menu">
-      <p><b style="color:var(--txt)">Fond de carte.</b> Importe le poster officiel <i>The Great State of Leonida</i> (téléchargeable gratuitement sur le site de GTA 6) : il est reconnu automatiquement, les points du pack se placent aux bons endroits, et s’il est connecté à ton compte il te suit sur tous tes appareils. Tu peux aussi importer n’importe quelle autre capture.</p>
+      <p><b style="color:var(--txt)">Fond de carte.</b> Importe le poster officiel <i>The Great State of Leonida</i> (téléchargeable gratuitement sur le site de GTA 6 ; prends la version « à imprimer », bien plus détaillée pour zoomer) : il est reconnu automatiquement, les points du pack se placent aux bons endroits, et s’il est connecté à ton compte il te suit sur tous tes appareils. Tu peux aussi importer n’importe quelle autre capture.</p>
       <button class="hbtn" id="mImportMap">🗺️ Importer une carte (poster Leonida, PNG / JPG)</button>
       <button class="hbtn" id="mResetMap">↺ Revenir à la carte stylisée (Floride)</button>
       <p style="margin-top:8px"><b style="color:var(--txt)">Sauvegarde.</b> Tes points sont enregistrés dans ce navigateur. Exporte-les pour les garder ou les passer sur un autre appareil.</p>
@@ -1201,7 +1201,16 @@ function setBackground(url, r, isCustom, isPoster){
   map.fitBounds(b);
   const fz = map.getZoom();
   map.setMinZoom(Math.floor(fz)-.5);
-  map.setMaxZoom(isCustom ? fz + 2.5 : 18);
+  map.setMaxZoom(isCustom ? fz + 3 : 18);
+  if(isCustom){
+    const im = new Image();
+    im.onload = ()=>{
+      const shown = map.latLngToContainerPoint(b.getNorthEast()).x - map.latLngToContainerPoint(b.getSouthWest()).x;
+      const native = Math.log2(Math.max(1, im.naturalWidth / Math.max(1, shown)));
+      map.setMaxZoom(fz + Math.max(3, native + 2));   // jusqu'à ~4x le niveau « pixel pour pixel »
+    };
+    im.src = url;
+  }
   labelLayer.clearLayers();
   if(!isCustom){
     REGIONS.filter(r=>r.x!=null).forEach(r=>{
@@ -1214,7 +1223,7 @@ function setBackground(url, r, isCustom, isPoster){
 async function initBackground(){
   let custom = null;
   try{ await idb.open(); custom = await idb.get('mapImage'); }catch(e){}
-  if(custom && custom.url){ setBackground(custom.url, custom.ratio, true, Math.abs(custom.ratio-POSTER_RATIO)<.01) }
+  if(custom && custom.url){ setBackground(custom.url, custom.ratio, true, isPosterRatio(custom.ratio)) }
   else setBackground(DEFAULT_MAP, 1, false, false);
 }
 
@@ -1232,6 +1241,10 @@ function filtered(){
     }
     return true;
   });
+}
+function gtabaseUrl(p){
+  const f = p.randy ? 'vehicle-request' : ({vehicle:'standout-vehicle', garage:'garages', collect:'collectible-card', stash:'gang-operation'})[p.cat];
+  return 'https://www.gtabase.com/fr/gta-6/carte/' + (f ? '?feature=' + f : '');
 }
 const money = n => (Math.round(+n||0)).toLocaleString('fr-FR') + ' $';
 function vehicleBlock(p){
@@ -1256,6 +1269,7 @@ function popupHTML(p){
          ${p.reward?`<div class="reward">💰 ${esc(p.reward)}</div>`:''}
          ${p.notes?`<div class="notes">${esc(p.notes)}</div>`:''}
          ${p.cat==='vehicle'? vehicleBlock(p) : ''}
+         <div class="notes">🗺️ Voir en détail : <a href="https://map.stateofleonida.net/" target="_blank" rel="noopener" style="color:var(--teal)">State of Leonida ↗</a> · <a href="${gtabaseUrl(p)}" target="_blank" rel="noopener" style="color:var(--teal)">GTABase ↗</a></div>
          ${p.approx?`<div class="meta" style="color:var(--orange)">📍 Position approximative : déplace-le (✥) quand tu l’as trouvé en jeu</div>`:''}
          ${link?`<div class="notes"><a href="${esc(link)}" target="_blank" rel="noopener" style="color:var(--teal)">Source : ${esc(new URL(link).hostname.replace(/^www\./,''))} ↗</a></div>`:''}`}
     <div class="acts">
@@ -1440,7 +1454,7 @@ $('#fileMap').addEventListener('change',e=>{
     img.onload = async ()=>{
       const ratio = img.naturalHeight/img.naturalWidth;
       const ok = await idb.set('mapImage',{url:rd.result, ratio});
-      const poster = Math.abs(ratio-POSTER_RATIO)<.01;
+      const poster = isPosterRatio(ratio);
       setBackground(rd.result, ratio, true, poster); closeModals();
       if(window.cloudSaveMap) cloudSaveMap(f, ratio);
       toast(poster ? 'Poster Leonida reconnu : points recalés' : (ok?'Carte importée':'Carte affichée (non sauvegardée)'));
@@ -1692,6 +1706,7 @@ const SEED = [
 const POSTER_POS = [[0.8727,0.5182],[0.8485,0.5004],[0.8558,0.4641],[0.5758,0.3366],[0.8364,0.4783],[0.7273,0.5935],[0.5212,0.7374],[0.503,0.7484],[0.5455,0.7086],[0.6182,0.5447],[0.3636,0.8459],[0.3697,0.857],[0.5636,0.8326],[0.8667,0.527],[0.6818,0.465],[0.3939,0.6244],[0.3061,0.3587],[0.2758,0.5934],[0.5455,0.8392],[0.6121,0.6887],[0.5727,0.8348],[0.5333,0.8437],[0.3121,0.3676],[0.3152,0.3499],[0.2879,0.5359],[0.497,0.2303],[0.7758,0.4872],[0.783,0.4925],[0.7788,0.519],[0.2836,0.5279],[0.8594,0.5337],[0.4455,0.7019],[0.6727,0.5957],[0.5867,0.4996],[0.577,0.5071],[0.6655,0.6014],[0.6242,0.5412],[0.6364,0.1749],[0.6303,0.6457],[0.5091,0.7795],[0.6242,0.6842],[0.3636,0.4362],[0.8315,0.4318],[0.3909,0.2945],[0.5606,0.6342],[0.5636,0.7972],[0.7564,0.5323],[0.7515,0.5359],[0.7612,0.5368],[0.3018,0.3508],[0.4533,0.69],[0.4242,0.3986],[0.6303,0.4128],[0.6303,0.5713],[0.5467,0.3401],[0.5564,0.3623],[0.28,0.5217],[0.823,0.4411],[0.8727,0.5058],[0.8679,0.519],[0.7364,0.3268],[0.6861,0.4951],[0.7358,0.589],[0.8194,0.4925],[0.8752,0.5128],[0.8594,0.5261],[0.5745,0.7019],[0.6582,0.6643],[0.2921,0.5376],[0.7806,0.4172],[0.3067,0.364],[0.3103,0.372],[0.4982,0.4606],[0.303,0.3787],[0.2485,0.31],[0.5485,0.3543],[0.4182,0.2179],[0.3042,0.3543],[0.5867,0.504],[0.6776,0.4632],[0.6642,0.5337],[0.2994,0.3596],[0.5564,0.8406],[0.5455,0.6909],[0.4279,0.7139],[0.577,0.8326],[0.6594,0.5381],[0.6521,0.6616],[0.3042,0.543],[0.7624,0.4216],[0.7188,0.4721],[0.7648,0.481],[0.8533,0.5226],[0.5915,0.4978],[0.4376,0.5855],[0.3303,0.4969],[0.4879,0.9035],[0.2958,0.5173],[0.7794,0.2604],[0.3879,0.4451],[0.8412,0.4836],[0.7988,0.5058],[0.8012,0.5093],[0.7964,0.5093],[0.8036,0.5049],[0.7952,0.504],[0.777,0.5235],[0.7867,0.5164]];
 const POSTER_REG = {vice:[0.6667,0.5226],keys:[0.4242,0.8636],grass:[0.4485,0.6643],gellhorn:[0.3030,0.3587],ambrosia:[0.5545,0.3587],kalaga:[0.4970,0.2259]};
 const POSTER_RATIO = 2576/1882;
+const isPosterRatio = r => Math.abs(r-POSTER_RATIO)/POSTER_RATIO < .03;
 let layout = 'florida';
 function applyLayout(){
   const fresh = Object.fromEntries(seedPoints().map(p=>[p.id,p]));
@@ -1899,7 +1914,7 @@ async function cloudLoadMap(){
   const url = await new Promise(r=>{ const fr=new FileReader(); fr.onload=()=>r(fr.result); fr.readAsDataURL(data) });
   const ratio = await new Promise(r=>{ const im=new Image(); im.onload=()=>r(im.naturalHeight/im.naturalWidth); im.onerror=()=>r(1); im.src=url });
   await idb.set('mapImage',{url, ratio});
-  setBackground(url, ratio, true, Math.abs(ratio-POSTER_RATIO)<.01);
+  setBackground(url, ratio, true, isPosterRatio(ratio));
   toast('☁️ Ta carte a été récupérée depuis ton compte');
 }
 function setCloudBadge(st){
