@@ -846,7 +846,7 @@ select.sel{width:100%;background:var(--panel2);border:1px solid var(--line);bord
 
 
 .hq-map canvas{image-rendering:auto}
-.hq-sharp .hq-up{filter:contrast(1.06) saturate(1.06)}
+
 </style>
 </head>
 <body>
@@ -933,7 +933,7 @@ select.sel{width:100%;background:var(--panel2);border:1px solid var(--line);bord
     <div class="mb menu">
       <p><b style="color:var(--txt)">Fond de carte.</b> Importe le poster officiel <i>The Great State of Leonida</i> (téléchargeable gratuitement sur le site de GTA 6 ; prends la version « à imprimer », bien plus détaillée pour zoomer) : il est reconnu automatiquement, les points du pack se placent aux bons endroits, et s’il est connecté à ton compte il te suit sur tous tes appareils. Tu peux aussi importer n’importe quelle autre capture.</p>
       <button class="hbtn" id="mImportMap">🗺️ Importer une carte (poster Leonida, PNG / JPG)</button>
-      <label class="toggle" id="tgSharp" style="padding:4px 0"><div>Netteté renforcée<small>Améliore le rendu quand on zoome au-delà de la résolution de l’image</small></div><div class="sw"></div></label>
+      <label class="toggle" id="tgSharp" style="padding:4px 0"><div>Netteté renforcée<small>Agrandissement haute qualité (Lanczos + accentuation) quand on zoome au-delà de la résolution de l’image</small></div><div class="sw"></div></label>
       <button class="hbtn" id="mResetMap">↺ Revenir à la carte stylisée (Floride)</button>
       <p style="margin-top:8px"><b style="color:var(--txt)">Sauvegarde.</b> Tes points sont enregistrés dans ce navigateur. Exporte-les pour les garder ou les passer sur un autre appareil.</p>
       <button class="hbtn" id="mExport">⬇ Exporter mes points (.json)</button>
@@ -1207,13 +1207,13 @@ function setBackground(url, r, isCustom, isPoster){
   map.fitBounds(b);
   const fz = map.getZoom();
   map.setMinZoom(Math.floor(fz)-.5);
-  map.setMaxZoom(isCustom ? fz + 3 : 18);
+  map.setMaxZoom(isCustom ? fz + 2 : 18);
   if(isCustom){
     const im = new Image();
     im.onload = ()=>{
       const shown = map.latLngToContainerPoint(b.getNorthEast()).x - map.latLngToContainerPoint(b.getSouthWest()).x;
       const native = Math.log2(Math.max(1, im.naturalWidth / Math.max(1, shown)));
-      map.setMaxZoom(fz + Math.max(3, native + 2));   // jusqu'à ~4x le niveau « pixel pour pixel »
+      map.setMaxZoom(fz + Math.max(2, native + 1));   // jusqu'à 2x le niveau « pixel pour pixel », au-delà ça devient flou
     };
     im.src = url;
   }
@@ -1230,6 +1230,24 @@ function setBackground(url, r, isCustom, isPoster){
    l'image est découpée à la volée en tuiles, à partir d'une pyramide de versions réduites proprement
    (lissage « high »), dessinées à la densité de l'écran (Retina) et légèrement affinées en zoom fort. */
 const HQ = { url:null, levels:null, w:0, h:0, sharpen: (()=>{ try{ return localStorage.getItem('leonida-atlas-sharpen')!=='0' }catch(e){ return true } })() };
+function loadPica(){
+  return new Promise(res=>{
+    if(window.pica) return res(true);
+    const sc=document.createElement('script'); sc.src='https://cdn.jsdelivr.net/npm/pica@9.0.1/dist/pica.min.js';
+    sc.onload=()=>res(!!window.pica); sc.onerror=()=>res(false); document.head.appendChild(sc);
+  });
+}
+async function hqUpscale(full){
+  // Agrandissement x2 de qualité (Lanczos + léger masque flou) pour les zooms au-delà de la résolution de l'image
+  if(!(await loadPica())) return null;
+  try{
+    const src = document.createElement('canvas'); src.width = full.width; src.height = full.height;
+    src.getContext('2d').drawImage(full,0,0);
+    const dst = document.createElement('canvas'); dst.width = full.width*2; dst.height = full.height*2;
+    await window.pica({ features:['js','wasm','ww'] }).resize(src, dst, { filter:'lanczos3', unsharpAmount:70, unsharpRadius:0.7, unsharpThreshold:4 });
+    return await createImageBitmap(dst);
+  }catch(e){ console.warn(e); return null }
+}
 async function hqPrepare(url){
   if(HQ.url===url && HQ.levels) return HQ;
   const blob = await (await fetch(url)).blob();
@@ -1242,7 +1260,10 @@ async function hqPrepare(url){
     catch(e){ const c = new OffscreenCanvas(w,h), x = c.getContext('2d'); x.imageSmoothingQuality='high'; x.drawImage(cur,0,0,w,h); next = c.transferToImageBitmap() }
     levels.push(next); cur = next;
   }
-  Object.assign(HQ, { url, levels, w:full.width, h:full.height });
+  Object.assign(HQ, { url, levels, w:full.width, h:full.height, up:null });
+  if(Math.max(full.width, full.height) <= 6000){        // inutile (et lourd) pour les très grandes images
+    hqUpscale(full).then(up=>{ if(up && HQ.url===url){ HQ.up = up; if(overlay && overlay.redraw) overlay.redraw() } });
+  }
   return HQ;
 }
 function hqLayer(url, bounds){
@@ -1250,10 +1271,11 @@ function hqLayer(url, bounds){
   const Layer = L.GridLayer.extend({
     createTile(coords, done){
       const tile = document.createElement('canvas');
-      const ts = this.getTileSize(), dpr = Math.min(window.devicePixelRatio||1, 2);
-      tile.width = ts.x*dpr; tile.height = ts.y*dpr;
+      const ts = this.getTileSize(), dpr = Math.min(window.devicePixelRatio||1, 2), OV = 1;   // 1 px de recouvrement : plus de jointures visibles
+      tile.width = (ts.x+OV)*dpr; tile.height = (ts.y+OV)*dpr;
+      tile.style.width = (ts.x+OV)+'px'; tile.style.height = (ts.y+OV)+'px';
       ready.then(hq=>{
-        const nw = map.unproject(coords.scaleBy(ts), coords.z), se = map.unproject(coords.add([1,1]).scaleBy(ts), coords.z);
+        const nw = map.unproject(coords.scaleBy(ts), coords.z), se = map.unproject(coords.scaleBy(ts).add([ts.x+OV, ts.y+OV]), coords.z);
         const a = toNorm(nw), b2 = toNorm(se);
         // position brute (sans bornage) pour les tuiles en bordure
         const p0 = SM.project(nw), p1 = SM.project(se);
@@ -1263,12 +1285,11 @@ function hqLayer(url, bounds){
         const srcW = (fx1-fx0)*hq.w;                       // pixels source couverts par la tuile
         const scale = srcW / tile.width;                   // >1 = on réduit
         let li = 0; while(li < hq.levels.length-1 && scale/Math.pow(2,li+1) >= 1) li++;
-        const img = hq.levels[li], k = img.width/hq.w;
+        const img = (scale < 1 && hq.up && HQ.sharpen) ? hq.up : hq.levels[li], k = img.width/hq.w;
         const ctx = tile.getContext('2d');
         ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
         const sx = fx0*hq.w*k, sy = fy0*hq.h*k, sw = (fx1-fx0)*hq.w*k, sh = (fy1-fy0)*hq.h*k;
         ctx.drawImage(img, sx, sy, sw, sh, 0, 0, tile.width, tile.height);
-        if(scale < .75) tile.classList.add('hq-up');       // zoom au-delà de la résolution native
         done(null, tile);
       }).catch(err=>done(err, tile));
       return tile;
@@ -1516,7 +1537,7 @@ $('#fileMap').addEventListener('change',e=>{
 });
 $('#tgSharp').classList.toggle('on', HQ.sharpen);
 $('#tgSharp').addEventListener('click',()=>{ HQ.sharpen=!HQ.sharpen; try{ localStorage.setItem('leonida-atlas-sharpen', HQ.sharpen?'1':'0') }catch(e){}
-  $('#tgSharp').classList.toggle('on',HQ.sharpen); const c=overlay?.getContainer?.(); if(c) c.classList.toggle('hq-sharp',HQ.sharpen) });
+  $('#tgSharp').classList.toggle('on',HQ.sharpen); if(overlay && overlay.redraw) overlay.redraw() });
 $('#mResetMap').addEventListener('click',async ()=>{ await idb.del('mapImage'); if(window.cloudDeleteMap) cloudDeleteMap(); setBackground(DEFAULT_MAP,1,false,false); closeModals(); toast('Carte stylisée restaurée') });
 $('#mExport').addEventListener('click',()=>{
   const blob = new Blob([JSON.stringify({app:'leonida-atlas',version:1,exported:new Date().toISOString(),points:state.points},null,2)],{type:'application/json'});
