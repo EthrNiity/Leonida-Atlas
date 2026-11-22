@@ -843,6 +843,13 @@ select.sel{width:100%;background:var(--panel2);border:1px solid var(--line);bord
 .ritem .rp{font-size:12px;color:var(--yellow);font-variant-numeric:tabular-nums}
 .ritem button{background:none;border:1px solid var(--line);border-radius:7px;padding:3px 7px;cursor:pointer;font-size:12px}
 @media (max-width:700px){.kpis{grid-template-columns:repeat(2,1fr)}.rlist{grid-template-columns:1fr}.addvf{grid-template-columns:1fr 1fr}}
+
+.live{position:fixed;inset:64px 0 0 0;z-index:1500;background:var(--bg);display:none;flex-direction:column}
+.live.show{display:flex}
+.livebar{display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap}
+.livebar .small{flex:1;min-width:200px}
+.livebar a.hbtn{text-decoration:none}
+.live iframe{flex:1;border:0;width:100%;background:#0b0b0b}
 </style>
 </head>
 <body>
@@ -855,6 +862,7 @@ select.sel{width:100%;background:var(--panel2);border:1px solid var(--line);bord
       <div class="stat"><b id="sDone">0</b>faits</div>
       <div class="progress" title="Progression"><i id="sBar"></i></div>
       <button class="hbtn primary" id="btnAdd">+ Ajouter un point</button>
+      <button class="hbtn" id="btnLive">🛰️ Carte détaillée</button>
       <button class="hbtn" id="btnDash">💰 Garage & ventes</button>
       <button class="hbtn" id="btnCloud" title="Synchronisation en ligne">☁️ Connexion</button>
       <button class="hbtn" id="btnMenu">☰ Options</button>
@@ -972,6 +980,20 @@ select.sel{width:100%;background:var(--panel2);border:1px solid var(--line);bord
       </div>
     </div>
   </div>
+</div>
+
+<!-- Panneau : carte détaillée d'un site externe, affichée telle quelle depuis ce site -->
+<div id="livePanel" class="live">
+  <div class="livebar">
+    <div class="seg" id="liveSeg" style="flex:none">
+      <button data-src="sol">State of Leonida</button>
+      <button data-src="gtab">GTABase</button>
+    </div>
+    <span class="small" id="liveHint">Carte affichée directement depuis le site choisi. Si elle reste blanche, ce site refuse l’affichage intégré : ouvre-le dans un onglet.</span>
+    <a class="hbtn" id="liveOpen" target="_blank" rel="noopener">Ouvrir dans un onglet ↗</a>
+    <button class="hbtn" id="liveClose">✕ Revenir à mon atlas</button>
+  </div>
+  <iframe id="liveFrame" title="Carte détaillée" referrerpolicy="no-referrer" allow="fullscreen"></iframe>
 </div>
 
 <!-- Modal : compte -->
@@ -1269,7 +1291,7 @@ function popupHTML(p){
          ${p.reward?`<div class="reward">💰 ${esc(p.reward)}</div>`:''}
          ${p.notes?`<div class="notes">${esc(p.notes)}</div>`:''}
          ${p.cat==='vehicle'? vehicleBlock(p) : ''}
-         <div class="notes">🗺️ Voir en détail : <a href="https://map.stateofleonida.net/" target="_blank" rel="noopener" style="color:var(--teal)">State of Leonida ↗</a> · <a href="${gtabaseUrl(p)}" target="_blank" rel="noopener" style="color:var(--teal)">GTABase ↗</a></div>
+         <div class="notes">🗺️ Voir en détail : <a href="https://map.stateofleonida.net/" data-live="sol" style="color:var(--teal)">State of Leonida</a> · <a href="${gtabaseUrl(p)}" data-live="gtab" style="color:var(--teal)">GTABase</a></div>
          ${p.approx?`<div class="meta" style="color:var(--orange)">📍 Position approximative : déplace-le (✥) quand tu l’as trouvé en jeu</div>`:''}
          ${link?`<div class="notes"><a href="${esc(link)}" target="_blank" rel="noopener" style="color:var(--teal)">Source : ${esc(new URL(link).hostname.replace(/^www\./,''))} ↗</a></div>`:''}`}
     <div class="acts">
@@ -1387,7 +1409,7 @@ map.on('click',e=>{
   setAddMode(false); openForm(null,pos);
 });
 map.on('dblclick',e=>{ setAddMode(false); openForm(null,toNorm(e.latlng)) });
-document.addEventListener('keydown',e=>{ if(e.key==='Escape'){ setAddMode(false); closeModals() } });
+document.addEventListener('keydown',e=>{ if(e.key==='Escape'){ setAddMode(false); closeModals(); $('#livePanel').classList.remove('show') } });
 
 document.addEventListener('click',e=>{
   const b = e.target.closest('[data-act]'); if(!b) return;
@@ -1974,6 +1996,20 @@ async function fetchCloudPack(manual){
   if(sbUser){ await cloudPull(); cloudLoadMap() }
   document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible'){ fetchCloudPack(false); if(sbUser) cloudPull() } });
 })();
+
+/* ============ Carte détaillée externe (option) ============ */
+const LIVE = { sol:'https://map.stateofleonida.net/', gtab:'https://www.gtabase.com/fr/gta-6/carte/' };
+function openLive(src, url){
+  try{ localStorage.setItem('leonida-atlas-live', src) }catch(e){}
+  const u = url || LIVE[src];
+  document.querySelectorAll('#liveSeg button').forEach(b=>b.classList.toggle('on', b.dataset.src===src));
+  const f = $('#liveFrame'); if(f.dataset.u!==u){ f.src = u; f.dataset.u = u }
+  $('#liveOpen').href = u; $('#livePanel').classList.add('show');
+}
+$('#btnLive').addEventListener('click',()=>{ const s0 = (()=>{ try{return localStorage.getItem('leonida-atlas-live')}catch(e){return null} })() || 'sol'; openLive(s0) });
+$('#liveSeg').addEventListener('click',e=>{ const b=e.target.closest('button'); if(b) openLive(b.dataset.src) });
+$('#liveClose').addEventListener('click',()=>$('#livePanel').classList.remove('show'));
+document.addEventListener('click',e=>{ const a=e.target.closest('a[data-live]'); if(!a) return; e.preventDefault(); map.closePopup(); openLive(a.dataset.live, a.href) });
 
 /* ============ Connexion ============ */
 function netStatus(){ $('#offline').style.display = navigator.onLine?'none':'inline' }
