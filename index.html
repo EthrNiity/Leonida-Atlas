@@ -844,12 +844,9 @@ select.sel{width:100%;background:var(--panel2);border:1px solid var(--line);bord
 .ritem button{background:none;border:1px solid var(--line);border-radius:7px;padding:3px 7px;cursor:pointer;font-size:12px}
 @media (max-width:700px){.kpis{grid-template-columns:repeat(2,1fr)}.rlist{grid-template-columns:1fr}.addvf{grid-template-columns:1fr 1fr}}
 
-.live{position:fixed;inset:64px 0 0 0;z-index:1500;background:var(--bg);display:none;flex-direction:column}
-.live.show{display:flex}
-.livebar{display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap}
-.livebar .small{flex:1;min-width:200px}
-.livebar a.hbtn{text-decoration:none}
-.live iframe{flex:1;border:0;width:100%;background:#0b0b0b}
+
+.hq-map canvas{image-rendering:auto}
+.hq-sharp .hq-up{filter:contrast(1.06) saturate(1.06)}
 </style>
 </head>
 <body>
@@ -862,7 +859,6 @@ select.sel{width:100%;background:var(--panel2);border:1px solid var(--line);bord
       <div class="stat"><b id="sDone">0</b>faits</div>
       <div class="progress" title="Progression"><i id="sBar"></i></div>
       <button class="hbtn primary" id="btnAdd">+ Ajouter un point</button>
-      <button class="hbtn" id="btnLive">🛰️ Carte détaillée</button>
       <button class="hbtn" id="btnDash">💰 Garage & ventes</button>
       <button class="hbtn" id="btnCloud" title="Synchronisation en ligne">☁️ Connexion</button>
       <button class="hbtn" id="btnMenu">☰ Options</button>
@@ -937,6 +933,7 @@ select.sel{width:100%;background:var(--panel2);border:1px solid var(--line);bord
     <div class="mb menu">
       <p><b style="color:var(--txt)">Fond de carte.</b> Importe le poster officiel <i>The Great State of Leonida</i> (téléchargeable gratuitement sur le site de GTA 6 ; prends la version « à imprimer », bien plus détaillée pour zoomer) : il est reconnu automatiquement, les points du pack se placent aux bons endroits, et s’il est connecté à ton compte il te suit sur tous tes appareils. Tu peux aussi importer n’importe quelle autre capture.</p>
       <button class="hbtn" id="mImportMap">🗺️ Importer une carte (poster Leonida, PNG / JPG)</button>
+      <label class="toggle" id="tgSharp" style="padding:4px 0"><div>Netteté renforcée<small>Améliore le rendu quand on zoome au-delà de la résolution de l’image</small></div><div class="sw"></div></label>
       <button class="hbtn" id="mResetMap">↺ Revenir à la carte stylisée (Floride)</button>
       <p style="margin-top:8px"><b style="color:var(--txt)">Sauvegarde.</b> Tes points sont enregistrés dans ce navigateur. Exporte-les pour les garder ou les passer sur un autre appareil.</p>
       <button class="hbtn" id="mExport">⬇ Exporter mes points (.json)</button>
@@ -980,20 +977,6 @@ select.sel{width:100%;background:var(--panel2);border:1px solid var(--line);bord
       </div>
     </div>
   </div>
-</div>
-
-<!-- Panneau : carte détaillée d'un site externe, affichée telle quelle depuis ce site -->
-<div id="livePanel" class="live">
-  <div class="livebar">
-    <div class="seg" id="liveSeg" style="flex:none">
-      <button data-src="sol">State of Leonida</button>
-      <button data-src="gtab">GTABase</button>
-    </div>
-    <span class="small" id="liveHint">Carte affichée directement depuis le site choisi. Si elle reste blanche, ce site refuse l’affichage intégré : ouvre-le dans un onglet.</span>
-    <a class="hbtn" id="liveOpen" target="_blank" rel="noopener">Ouvrir dans un onglet ↗</a>
-    <button class="hbtn" id="liveClose">✕ Revenir à mon atlas</button>
-  </div>
-  <iframe id="liveFrame" title="Carte détaillée" referrerpolicy="no-referrer" allow="fullscreen"></iframe>
 </div>
 
 <!-- Modal : compte -->
@@ -1215,7 +1198,8 @@ function setBackground(url, r, isCustom, isPoster){
   if(newLayout!==layout){ layout = newLayout; if(layout!=='custom'){ applyLayout(); save() } }
   const b = boxBounds();
   if(overlay) map.removeLayer(overlay);
-  overlay = L.imageOverlay(url, b, {className: isCustom?'':'neon-overlay'}).addTo(map);
+  overlay = isCustom ? hqLayer(url, b) : L.imageOverlay(url, b, {className:'neon-overlay'});
+  overlay.addTo(map);
   overlay.bringToBack();
   if(isCustom){ map.removeLayer(tiles) } else if(!map.hasLayer(tiles)){ tiles.addTo(map) }
   map.setMaxZoom(18); map.setMinZoom(1);
@@ -1242,6 +1226,56 @@ function setBackground(url, r, isCustom, isPoster){
   fadeOverlay();
   render();
 }
+/* Rendu haute qualité des cartes importées :
+   l'image est découpée à la volée en tuiles, à partir d'une pyramide de versions réduites proprement
+   (lissage « high »), dessinées à la densité de l'écran (Retina) et légèrement affinées en zoom fort. */
+const HQ = { url:null, levels:null, w:0, h:0, sharpen: (()=>{ try{ return localStorage.getItem('leonida-atlas-sharpen')!=='0' }catch(e){ return true } })() };
+async function hqPrepare(url){
+  if(HQ.url===url && HQ.levels) return HQ;
+  const blob = await (await fetch(url)).blob();
+  const full = await createImageBitmap(blob);
+  const levels = [full]; let cur = full;
+  while(Math.max(cur.width, cur.height) > 1024){
+    const w = Math.max(1, Math.round(cur.width/2)), h = Math.max(1, Math.round(cur.height/2));
+    let next;
+    try{ next = await createImageBitmap(cur, { resizeWidth:w, resizeHeight:h, resizeQuality:'high' }) }
+    catch(e){ const c = new OffscreenCanvas(w,h), x = c.getContext('2d'); x.imageSmoothingQuality='high'; x.drawImage(cur,0,0,w,h); next = c.transferToImageBitmap() }
+    levels.push(next); cur = next;
+  }
+  Object.assign(HQ, { url, levels, w:full.width, h:full.height });
+  return HQ;
+}
+function hqLayer(url, bounds){
+  const ready = hqPrepare(url);
+  const Layer = L.GridLayer.extend({
+    createTile(coords, done){
+      const tile = document.createElement('canvas');
+      const ts = this.getTileSize(), dpr = Math.min(window.devicePixelRatio||1, 2);
+      tile.width = ts.x*dpr; tile.height = ts.y*dpr;
+      ready.then(hq=>{
+        const nw = map.unproject(coords.scaleBy(ts), coords.z), se = map.unproject(coords.add([1,1]).scaleBy(ts), coords.z);
+        const a = toNorm(nw), b2 = toNorm(se);
+        // position brute (sans bornage) pour les tuiles en bordure
+        const p0 = SM.project(nw), p1 = SM.project(se);
+        const fx0 = (p0.x-PTL.x)/(PBR.x-PTL.x), fy0 = (p0.y-PTL.y)/(boxBottomY()-PTL.y);
+        const fx1 = (p1.x-PTL.x)/(PBR.x-PTL.x), fy1 = (p1.y-PTL.y)/(boxBottomY()-PTL.y);
+        if(fx1<=0 || fy1<=0 || fx0>=1 || fy0>=1){ done(null, tile); return }
+        const srcW = (fx1-fx0)*hq.w;                       // pixels source couverts par la tuile
+        const scale = srcW / tile.width;                   // >1 = on réduit
+        let li = 0; while(li < hq.levels.length-1 && scale/Math.pow(2,li+1) >= 1) li++;
+        const img = hq.levels[li], k = img.width/hq.w;
+        const ctx = tile.getContext('2d');
+        ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+        const sx = fx0*hq.w*k, sy = fy0*hq.h*k, sw = (fx1-fx0)*hq.w*k, sh = (fy1-fy0)*hq.h*k;
+        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, tile.width, tile.height);
+        if(scale < .75) tile.classList.add('hq-up');       // zoom au-delà de la résolution native
+        done(null, tile);
+      }).catch(err=>done(err, tile));
+      return tile;
+    }
+  });
+  return new Layer({ tileSize:256, bounds, noWrap:true, updateWhenZooming:false, keepBuffer:4, className: HQ.sharpen ? 'hq-map hq-sharp' : 'hq-map' });
+}
 async function initBackground(){
   let custom = null;
   try{ await idb.open(); custom = await idb.get('mapImage'); }catch(e){}
@@ -1263,10 +1297,6 @@ function filtered(){
     }
     return true;
   });
-}
-function gtabaseUrl(p){
-  const f = p.randy ? 'vehicle-request' : ({vehicle:'standout-vehicle', garage:'garages', collect:'collectible-card', stash:'gang-operation'})[p.cat];
-  return 'https://www.gtabase.com/fr/gta-6/carte/' + (f ? '?feature=' + f : '');
 }
 const money = n => (Math.round(+n||0)).toLocaleString('fr-FR') + ' $';
 function vehicleBlock(p){
@@ -1291,7 +1321,6 @@ function popupHTML(p){
          ${p.reward?`<div class="reward">💰 ${esc(p.reward)}</div>`:''}
          ${p.notes?`<div class="notes">${esc(p.notes)}</div>`:''}
          ${p.cat==='vehicle'? vehicleBlock(p) : ''}
-         <div class="notes">🗺️ Voir en détail : <a href="https://map.stateofleonida.net/" data-live="sol" style="color:var(--teal)">State of Leonida</a> · <a href="${gtabaseUrl(p)}" data-live="gtab" style="color:var(--teal)">GTABase</a></div>
          ${p.approx?`<div class="meta" style="color:var(--orange)">📍 Position approximative : déplace-le (✥) quand tu l’as trouvé en jeu</div>`:''}
          ${link?`<div class="notes"><a href="${esc(link)}" target="_blank" rel="noopener" style="color:var(--teal)">Source : ${esc(new URL(link).hostname.replace(/^www\./,''))} ↗</a></div>`:''}`}
     <div class="acts">
@@ -1409,7 +1438,7 @@ map.on('click',e=>{
   setAddMode(false); openForm(null,pos);
 });
 map.on('dblclick',e=>{ setAddMode(false); openForm(null,toNorm(e.latlng)) });
-document.addEventListener('keydown',e=>{ if(e.key==='Escape'){ setAddMode(false); closeModals(); $('#livePanel').classList.remove('show') } });
+document.addEventListener('keydown',e=>{ if(e.key==='Escape'){ setAddMode(false); closeModals() } });
 
 document.addEventListener('click',e=>{
   const b = e.target.closest('[data-act]'); if(!b) return;
@@ -1485,6 +1514,9 @@ $('#fileMap').addEventListener('change',e=>{
   };
   rd.readAsDataURL(f); e.target.value='';
 });
+$('#tgSharp').classList.toggle('on', HQ.sharpen);
+$('#tgSharp').addEventListener('click',()=>{ HQ.sharpen=!HQ.sharpen; try{ localStorage.setItem('leonida-atlas-sharpen', HQ.sharpen?'1':'0') }catch(e){}
+  $('#tgSharp').classList.toggle('on',HQ.sharpen); const c=overlay?.getContainer?.(); if(c) c.classList.toggle('hq-sharp',HQ.sharpen) });
 $('#mResetMap').addEventListener('click',async ()=>{ await idb.del('mapImage'); if(window.cloudDeleteMap) cloudDeleteMap(); setBackground(DEFAULT_MAP,1,false,false); closeModals(); toast('Carte stylisée restaurée') });
 $('#mExport').addEventListener('click',()=>{
   const blob = new Blob([JSON.stringify({app:'leonida-atlas',version:1,exported:new Date().toISOString(),points:state.points},null,2)],{type:'application/json'});
@@ -1996,20 +2028,6 @@ async function fetchCloudPack(manual){
   if(sbUser){ await cloudPull(); cloudLoadMap() }
   document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible'){ fetchCloudPack(false); if(sbUser) cloudPull() } });
 })();
-
-/* ============ Carte détaillée externe (option) ============ */
-const LIVE = { sol:'https://map.stateofleonida.net/', gtab:'https://www.gtabase.com/fr/gta-6/carte/' };
-function openLive(src, url){
-  try{ localStorage.setItem('leonida-atlas-live', src) }catch(e){}
-  const u = url || LIVE[src];
-  document.querySelectorAll('#liveSeg button').forEach(b=>b.classList.toggle('on', b.dataset.src===src));
-  const f = $('#liveFrame'); if(f.dataset.u!==u){ f.src = u; f.dataset.u = u }
-  $('#liveOpen').href = u; $('#livePanel').classList.add('show');
-}
-$('#btnLive').addEventListener('click',()=>{ const s0 = (()=>{ try{return localStorage.getItem('leonida-atlas-live')}catch(e){return null} })() || 'sol'; openLive(s0) });
-$('#liveSeg').addEventListener('click',e=>{ const b=e.target.closest('button'); if(b) openLive(b.dataset.src) });
-$('#liveClose').addEventListener('click',()=>$('#livePanel').classList.remove('show'));
-document.addEventListener('click',e=>{ const a=e.target.closest('a[data-live]'); if(!a) return; e.preventDefault(); map.closePopup(); openLive(a.dataset.live, a.href) });
 
 /* ============ Connexion ============ */
 function netStatus(){ $('#offline').style.display = navigator.onLine?'none':'inline' }
